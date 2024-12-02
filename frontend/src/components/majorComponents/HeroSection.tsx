@@ -1,9 +1,13 @@
 // import video1 from "../../assets/video1.mp4";
 // import video2 from "../../assets/video2.mp4";
+import { useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 
 
 const HeroSection = () => {
+
+
+  const router = useNavigate()
 
   return (
 <div className="relative flex flex-col items-center mt-6 lg:mt-20">
@@ -18,7 +22,7 @@ const HeroSection = () => {
   </p>
 
   <div className="flex flex-col md:flex-row justify-center my-10 relative gap-5 md:gap-4 items-center">
-    <Button variant={"myButton"} aria-label="Rider">Find a Bike</Button>
+    <Button variant={"myButton"} aria-label="Rider"  onClick={()=>router('/dashboard')}>Find a Bike</Button>
     <Button variant={"myButton"} aria-label="Environmentalist">Learn More</Button>
   </div>
 </div>

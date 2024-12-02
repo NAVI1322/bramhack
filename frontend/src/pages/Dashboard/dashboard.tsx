@@ -1,44 +1,25 @@
 import React, { useState, useEffect } from "react";
-import {
-  GoogleMap,
-  useJsApiLoader,
-  MarkerF,
-  DirectionsRenderer,
-  Autocomplete,
-} from "@react-google-maps/api";
+import { GoogleMap, useJsApiLoader, MarkerF, DirectionsRenderer, Autocomplete } from "@react-google-maps/api";
 import userIcon from "@/assets/svg/userIcon.png";
 import evHubIcon from "@/assets/svg/evHubIcon.png";
 import Navbar from "./NavBar";
 import LiveLocation from "./components/livelocatoin";
+import axios from "axios"; // Import axios
+import { useNavigate } from "react-router-dom";
 
-const predefinedEVStations = [
-  { name: "Station 1", lat: 43.69084318904449, lng: -79.75499153673132 },
-  { name: "Station 2", lat: 43.6955172362235, lng: -79.750072376801 },
-  { name: "Station 3", lat: 43.7022981448845, lng: -79.74292285026856 },
-  { name: "Station 4", lat: 43.67834202501027, lng: -79.7498977842494 },
-];
-
-const bikeOptions = [
-  { name: "EV Bike 1", description: "Eco-friendly and fast", price: "$10.00" },
-  { name: "EV Bike 2", description: "Comfortable ride", price: "$12.00" },
-  { name: "EV Bike 3", description: "High speed and range", price: "$15.00" },
-  { name: "EV Bike 4", description: "City commuting", price: "$11.00" },
-  { name: "EV Bike 5", description: "Stylish design", price: "$13.00" },
-];
-
-const libraries: ("places" | "geometry")[] = ["places", "geometry"]; // Constant libraries for performance
+const libraries: ("places" | "geometry")[] = ["places", "geometry"];
 
 const RoutePlanner: React.FC = () => {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [startLocation, setStartLocation] = useState<string | { lat: number; lng: number }>("My Location");
-  const [nearestHubs, setNearestHubs] = useState<{ name: string; distance: number }[]>([]);
-  const [selectedHub, setSelectedHub] = useState<string | null>(null);
-  const [directionsResponse, setDirectionsResponse] = useState<google.maps.DirectionsResult | null>(
-    null
-  );
+  const [userAddress, setUserAddress] = useState<string>(""); // Store user address
+  const [startLocation, setStartLocation] = useState<any>("My Location");
+  const [nearestHubs, setNearestHubs] = useState<{ name: string; distance: number; id: number; address: string }[]>([]);
+  const [selectedHub, setSelectedHub] = useState<number | null>(null);
+  const [directionsResponse, setDirectionsResponse] = useState<google.maps.DirectionsResult | null>(null);
   const [autocompleteStart, setAutocompleteStart] = useState<any>(null);
   const [isMobile, setIsMobile] = useState<boolean>(false);
-  const [showMapPopup, setShowMapPopup] = useState<boolean>(false);
+  const [stations, setStations] = useState<any[]>([]);
+  const [bikes, setBikes] = useState<any[]>([]);
 
   const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -48,13 +29,66 @@ const RoutePlanner: React.FC = () => {
     libraries,
   });
 
+  const router = useNavigate()
+
+  // Fetch stations and bikes data using Axios
+  const fetchStationsAndBikes = async () => {
+    try {
+      const stationResponse = await axios.get("http://localhost:3000/api/v1/get/station");
+      const bikeResponse = await axios.get("http://localhost:3000/api/v1/get/bike_data");
+
+      setStations(stationResponse.data);
+      setBikes(bikeResponse.data);
+
+      // Add address to stations using Google Maps Geocoder
+      const geocoder = new google.maps.Geocoder();
+
+      const stationsWithAddress = await Promise.all(
+        stationResponse.data.map(async (station: any) => {
+          const latLng = new google.maps.LatLng(station.location.latitude, station.location.longitude);
+          const results = await new Promise<google.maps.GeocoderResult[]>((resolve, reject) => {
+            geocoder.geocode({ location: latLng }, (results, status) => {
+              if (status === "OK" && results) {
+                resolve(results);
+              } else {
+                resolve([]); // Return empty array if no results
+              }
+            });
+          });
+
+          const address = results.length > 0 ? results[0]?.formatted_address : "Address not available";
+          return { ...station, address };
+        })
+      );
+
+      setStations(stationsWithAddress);
+
+    } catch (error) {
+      console.error("Error fetching stations or bikes:", error);
+    }
+  };
+
   useEffect(() => {
+    fetchStationsAndBikes();
+
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           setUserLocation({
             lat: position.coords.latitude,
             lng: position.coords.longitude,
+          });
+          const latLng = new google.maps.LatLng(position.coords.latitude, position.coords.longitude);
+
+          // Use Geocoder to fetch user address based on coordinates
+          const geocoder = new google.maps.Geocoder();
+          geocoder.geocode({ location: latLng }, (results: any, status) => {
+            if (status === "OK" && results[0]) {
+              setUserAddress(results[0].formatted_address); // Set the user address
+              setStartLocation(results[0].formatted_address); // Set the start location to the address
+            } else {
+              console.error("Geocoder failed due to: " + status);
+            }
           });
         },
         (error) => {
@@ -71,35 +105,22 @@ const RoutePlanner: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const location: any =
-      typeof startLocation === "string" && startLocation === "My Location"
-        ? userLocation
-        : startLocation;
+    if (userLocation) {
+      const calculateDistances = stations.map((station) => ({
+        name: station.name,
+        distance: calculateDistance(
+          userLocation.lat,
+          userLocation.lng,
+          station.location.latitude,
+          station.location.longitude
+        ),
+        id: station.id,
+        address: station.address, // Add address to the nearest hubs
+      }));
 
-    if (!location) return;
-
-    const calculateDistances = predefinedEVStations.map((station) => ({
-      name: station.name,
-      distance: calculateDistance(location.lat, location.lng, station.lat, station.lng),
-    }));
-
-    setNearestHubs(calculateDistances.sort((a, b) => a.distance - b.distance));
-  }, [userLocation, startLocation]);
-
-  useEffect(() => {
-    if (
-      (typeof startLocation === "string" && startLocation === "My Location" && userLocation) ||
-      (typeof startLocation !== "string" && startLocation) &&
-      selectedHub
-    ) {
-      const location =
-        typeof startLocation === "string" ? userLocation : startLocation;
-      const selectedStation = predefinedEVStations.find((station) => station.name === selectedHub);
-      if (location && selectedStation) {
-        calculateRoute(location, { lat: selectedStation.lat, lng: selectedStation.lng });
-      }
+      setNearestHubs(calculateDistances.sort((a, b) => a.distance - b.distance));
     }
-  }, [startLocation, selectedHub]);
+  }, [userLocation, stations]);
 
   const calculateDistance = (
     lat1: number,
@@ -124,6 +145,17 @@ const RoutePlanner: React.FC = () => {
     return R * c;
   };
 
+  const handleAutocompleteStartChange = () => {
+    const place = autocompleteStart.getPlace();
+    if (place.geometry?.location) {
+      const location = {
+        lat: place.geometry.location.lat(),
+        lng: place.geometry.location.lng(),
+      };
+      setStartLocation(location);
+    }
+  };
+
   const calculateRoute = async (
     origin: { lat: number; lng: number },
     destination: { lat: number; lng: number }
@@ -140,75 +172,80 @@ const RoutePlanner: React.FC = () => {
     setDirectionsResponse(result);
   };
 
-  const handleAutocompleteStartChange = () => {
-    const place = autocompleteStart.getPlace();
-    if (place.geometry?.location) {
-      const location = {
-        lat: place.geometry.location.lat(),
-        lng: place.geometry.location.lng(),
-      };
-      setStartLocation(location);
-    }
+  const getBikesAtSelectedHub = (selectedHubId: number) => {
+    const filteredBikes = bikes.filter((bike) => bike.station.id === selectedHubId);
+    return filteredBikes;
   };
 
   return isLoaded ? (
     <div className="flex flex-col h-screen">
       <Navbar />
       <LiveLocation onLocationUpdate={setUserLocation} />
-      <div className={`flex ${isMobile ? "flex-col" : "flex-row-reverse"} h-full`}>
+      <div className={`flex h-full`}>
         {/* Map */}
-        {isMobile && !showMapPopup && (
-          <button
-            className="px-4 py-2 bg-blue-500 text-white rounded w-full mb-4 md:hidden"
-            onClick={() => setShowMapPopup(true)}
-          >
-            Show Map
-          </button>
-        )}
+        <div className="flex-1 h-[60%] md:h-full">
+        <GoogleMap
+  mapContainerStyle={{ width: "100%", height: "100%" }}
+  center={userLocation || { lat: 43.72403555255983, lng: -79.71831315768694 }}
+  zoom={12}
+  options={{
+    disableDefaultUI: true,
+    zoomControl: true,
+    styles: [
+      {
+        featureType: "poi",
+        elementType: "labels.icon",
+        stylers: [{ visibility: "off" }],
+      },
+      {
+        featureType: "transit",
+        elementType: "labels.icon",
+        stylers: [{ visibility: "on" }],
+      },
+      {
+        featureType: "road",
+        elementType: "labels.icon",
+        stylers: [{ visibility: "off" }],
+      },
+      {
+        featureType: "administrative",
+        elementType: "labels.icon",
+        stylers: [{ visibility: "off" }],
+      },
+      {
+        featureType: "landscape",
+        elementType: "labels.icon",
+        stylers: [{ visibility: "off" }],
+      },
+    ],
+  }}
+>
+  {/* Station Markers */}
+  {stations.map((station, i) => (
+    <MarkerF
+      key={i}
+      position={{ lat: station.location.latitude, lng: station.location.longitude }}
+      icon={{
+        url: evHubIcon, // Your custom station icon
+        scaledSize: new window.google.maps.Size(30, 30),
+      }}
+    />
+  ))}
 
-        <div
-          className={`flex-1 h-[60%] md:h-full ${
-            isMobile && showMapPopup ? "fixed inset-x-0 bottom-0 top-[20%] bg-white z-50" : "hidden md:block"
-          }`}
-        >
-          <GoogleMap
-            mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={userLocation || { lat: 43.72403555255983, lng: -79.71831315768694 }}
-            zoom={12}
-            options={{
-              disableDefaultUI: true,
-              zoomControl: true,
-            }}
-          >
-            {predefinedEVStations.map((station, i) => (
-              <MarkerF
-                key={i}
-                position={{ lat: station.lat, lng: station.lng }}
-                icon={{
-                  url: evHubIcon,
-                  scaledSize: new window.google.maps.Size(30, 30),
-                }}
-              />
-            ))}
-            {userLocation && (
-              <MarkerF
-                position={userLocation}
-                icon={{
-                  url: userIcon,
-                  scaledSize: new window.google.maps.Size(30, 30),
-                }}
-              />
-            )}
-            {directionsResponse && <DirectionsRenderer directions={directionsResponse} />}
-          </GoogleMap>
-          {isMobile && (
-            <button
-              className="absolute top-4 right-4 px-4 py-2 bg-blue-500 text-white rounded"
-              onClick={() => setShowMapPopup(false)}
-            >
-              Close Map
-            </button>
-          )}
+  {/* User Location Marker */}
+  {userLocation && (
+    <MarkerF
+      position={userLocation}
+      icon={{
+        url: userIcon, // Your custom user icon
+        scaledSize: new window.google.maps.Size(30, 30),
+      }}
+    />
+  )}
+
+  {/* Directions Renderer */}
+  {directionsResponse && <DirectionsRenderer directions={directionsResponse} />}
+</GoogleMap>
         </div>
 
         {/* Sidebar/Form */}
@@ -216,7 +253,7 @@ const RoutePlanner: React.FC = () => {
           <div className="space-y-4">
             {/* Start Location */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label className="block text-sm font-medium:bg-gray-700 dark:text-gray-300">
                 Start Location
               </label>
               <Autocomplete
@@ -226,52 +263,87 @@ const RoutePlanner: React.FC = () => {
                 <input
                   type="text"
                   placeholder="Type your location or select My Location"
-                  className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-3 border rounded-lg focus:outline-none bg-white  focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                  value={userAddress || startLocation}
+                  readOnly
                 />
               </Autocomplete>
               <div className="mt-2">
                 <button
                   className="px-4 py-2 bg-blue-500 text-white rounded"
-                  onClick={() => setStartLocation("My Location")}
+                  onClick={() => setStartLocation(userAddress)}
                 >
                   Use My Location
                 </button>
               </div>
             </div>
 
-            {/* Select Hub */}
+            {/* Nearest Hub */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Nearest Hub Stations
               </label>
               <select
-                className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 bg-white  focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                 value={selectedHub || ""}
-                onChange={(e) => setSelectedHub(e.target.value)}
+                onChange={(e) => {
+                  const selectedId = parseInt(e.target.value, 10);
+                  setSelectedHub(selectedId);
+                  const selectedStation = stations.find(
+                    (station) => station.id === selectedId
+                  );
+                  if (userLocation && selectedStation) {
+                    calculateRoute(userLocation, {
+                      lat: selectedStation.location.latitude,
+                      lng: selectedStation.location.longitude,
+                    });
+                  }
+                }}
               >
                 <option value="">Select a hub</option>
                 {nearestHubs.map((hub) => (
-                  <option key={hub.name} value={hub.name}>
-                    {hub.name} ({hub.distance.toFixed(2)} km)
+                  <option key={hub.id} value={hub.id}>
+                    {hub.address}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Available Bikes */}
+            {/* Available Bikes at the selected hub */}
             {selectedHub && (
               <div className="space-y-4 overflow-y-scroll scroll-thin md:max-h-[500px] border-t border-gray-300 dark:border-gray-600 pt-4">
                 <h3 className="text-md font-semibold text-gray-800 dark:text-gray-100">
                   Available Bikes at {selectedHub}:
                 </h3>
-                {bikeOptions.map((bike, i) => (
+                {getBikesAtSelectedHub(selectedHub).map((bike, i) => (
                   <div
                     key={i}
-                    className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg shadow"
-                  >
-                    <h4 className="font-bold">{bike.name}</h4>
-                    <p>{bike.description}</p>
-                    <p className="font-bold">{bike.price}</p>
+                    className="p-6 cursor-pointer bg-white dark:bg-gray-800 rounded-lg shadow-lg transition-transform transform hover:scale-105 hover:shadow-xl"
+                 onClick={()=>{router(`/bike-rent/${bike.id}`)}}  >
+                    <div className="flex items-center space-x-4">
+                      {/* Bike Icon or Image */}
+                      <div className="w-12 h-12 bg-blue-500 rounded-full flex justify-center items-center text-white">
+                        <span className="text-xl">{bike.name[0]}</span> {/* First letter as icon */}
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100">{bike.name}</h4>
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          Available: {bike.isAvailable ? "Yes" : "No"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      {/* Bike Details */}
+                      <div className="flex justify-between text-gray-500 dark:text-gray-300 text-sm">
+                        <span>{bike.station?.name}</span>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      {/* Bike Price or Additional Info */}
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600 dark:text-gray-300">Price: $12.00</span>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -286,3 +358,5 @@ const RoutePlanner: React.FC = () => {
 };
 
 export default RoutePlanner;
+
+
